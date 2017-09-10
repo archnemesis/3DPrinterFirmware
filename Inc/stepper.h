@@ -25,6 +25,12 @@ enum Axis {
 	ZAxis
 };
 
+enum Plane {
+	XYPlane,
+	XZPlane,
+	YZPlane
+};
+
 struct StepperChannel {
 	/* GPIO Ports and Pins */
 	GPIO_TypeDef *port_clk;
@@ -63,6 +69,7 @@ struct StepperState {
 	struct StepperCoord work_offset;
 	float feedrate_max;
 	float feedrate_current;
+	enum Plane active_plane;
 };
 
 /**
@@ -101,5 +108,11 @@ void stepper_channel_set_clk_port(unsigned int ch, GPIO_TypeDef *port, uint8_t p
 void stepper_channel_set_dir_port(unsigned int ch, GPIO_TypeDef *port, uint8_t pin);
 void stepper_channel_set_en_port(unsigned int ch, GPIO_TypeDef *port, uint8_t pin);
 void stepper_timer_callback(void);
+float stepper_get_machine_x(void);
+float stepper_get_machine_y(void);
+float stepper_get_machine_z(void);
+float stepper_get_current_feedrate(void);
+enum Plane stepper_get_active_plane(void);
+void stepper_set_active_plane(enum Plane plane);
 
 #endif /* STEPPER_H_ */

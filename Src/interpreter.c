@@ -52,21 +52,20 @@ void process_line(const char *line)
 		switch ((int)parse_number(line, 'G', -1)) {
 		case 0:
 			if (extract_var(line, 'X', &arg_x) == 0) {
-				arg_x = stepper.machine_coord.x;
+				arg_x = stepper_get_machine_x();
 			}
 
 			if (extract_var(line, 'Y', &arg_y) == 0) {
-				arg_y = stepper.machine_coord.y;
+				arg_y = stepper_get_machine_y();
 			}
 
 			if (extract_var(line, 'Z', &arg_z) == 0) {
-				arg_z = stepper.machine_coord.z;
+				arg_z = stepper_get_machine_z();
 			}
 
-			arg_x = parse_number(line, 'X', tool_state.current_x);
-			arg_y = parse_number(line, 'Y', tool_state.current_y);
-			arg_z = parse_number(line, 'Z', tool_state.current_z);
-			arg_f = parse_number(line, 'F', tool_state.current_feedrate);
+			if (extract_var(line, 'F', &arg_f) == 0) {
+				arg_f = stepper_get_current_feedrate();
+			}
 
 			HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_SET);
 			stepper_set_feedrate(arg_f);
@@ -77,15 +76,15 @@ void process_line(const char *line)
 			// do move
 			break;
 		case 17:
-			tool_state.current_plane = PLANE_XY;
+			stepper_set_active_plane(XYPlane);
 			server_write("OK\r\n");
 			break;
 		case 18:
-			tool_state.current_plane = PLANE_ZX;
+			stepper_set_active_plane(XZPlane);
 			server_write("OK\r\n");
 			break;
 		case 19:
-			tool_state.current_plane = PLANE_YZ;
+			stepper_set_active_plane(YZPlane);
 			server_write("OK\r\n");
 			break;
 		case 28:
