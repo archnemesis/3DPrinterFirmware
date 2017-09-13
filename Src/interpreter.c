@@ -11,21 +11,6 @@
 
 #include "stepper.h"
 
-
-float parse_number(const char *line, char code, int def)
-{
-	const char *ptr = line;
-
-	while (ptr && *ptr && ptr < line + strlen(line)) {
-		if (*ptr == code) {
-			return atof(ptr + 1);
-		}
-		ptr = strchr(ptr, ' ') + 1;
-	}
-
-	return def;
-}
-
 int extract_var(const char *line, char code, float *result)
 {
 	const char *ptr = line;
@@ -43,13 +28,20 @@ int extract_var(const char *line, char code, float *result)
 
 void process_line(const char *line)
 {
-	double arg_x = 0;
-	double arg_y = 0;
-	double arg_z = 0;
-	double arg_f = 0;
+	float arg_cmd = 0;
+	float arg_x = 0;
+	float arg_y = 0;
+	float arg_z = 0;
+	float arg_f = 0;
+	char return_buffer[32];
 
 	if (line[0] == 'G') {
-		switch ((int)parse_number(line, 'G', -1)) {
+		if (extract_var(line, 'G', &arg_cmd) == 0) {
+			server_write("ERR\r\n");
+			return;
+		}
+
+		switch ((unsigned int)arg_cmd) {
 		case 0:
 			if (extract_var(line, 'X', &arg_x) == 0) {
 				arg_x = stepper_get_machine_x();
@@ -96,7 +88,86 @@ void process_line(const char *line)
 			break;
 		}
 	}
+	else if (line[0] == 'C') {
+		if (extract_var(line, 'C', &arg_cmd) == 0) {
+			server_write("ERR\r\n");
+			return;
+		}
+		switch ((unsigned int)arg_cmd) {
+		case 0:
+			/* TODO: C0 reset configuration */
+			break;
+		case 1:
+			/**
+			 * C1: Set stepper channel configuration
+			 * Example:
+			 * 	C1 X0 S40 R1 A0 E1
+			 * 	(X) Channel = 0
+			 * 	(S) Steps per MM = 40 steps per mm
+			 * 	(R) Reverse = 1 (Fwd=0, Rev=1)
+			 * 	(A) Axis = X (X=0, Y=1, Z=2)
+			 */
+
+			float t;
+			unsigned int ch;
+			unsigned int u;
+
+			if (extract_var(line, 'X', &t) == 0) {
+				server_write("ERR\r\n");
+				break;
+			}
+
+			ch = (unsigned int)t;
+
+			if (ch < 0 || ch >= STEPPER_NUM_CHANNELS) {
+				server_write("ERR\r\n");
+			}
+
+			if (extract_var(line, 'S', &t) == 1) {
+				stepper_channel_set_steps_per_mm(ch, (unsigned int)t);
+			}
+
+			if (extract_var(line, 'R', &t) == 1) {
+				if ((unsigned int)t > 1) {
+					server_write("ERR\r\n");
+					break;
+				}
+				stepper_channel_set_reverse(ch, (bool)t);
+			}
+
+			if (extract_var(line, 'A', &t) == 1) {
+				if ((unsigned int)t > 2) {
+					server_write("ERR\r\n");
+					break;
+				}
+				stepper_channel_set_axis(ch, (enum Axis)t);
+			}
+
+			sprintf(return_buffer, "C1 X%d S%d D%d A%d\r\n",
+					ch,
+					stepper_channel_get_steps_per_mm(ch),
+					(unsigned int)stepper_channel_get_reverse(ch),
+					(unsigned int)stepper_channel_get_axis(ch));
+
+			server_write(return_buffer);
+
+			break;
+		case 2:
+			/**
+			 * C2: Set limit switch configuration
+			 * Example:
+			 * 	C2 X0 A0 D1
+			 * 	(X) Channel = 0
+			 * 	(A) Axis = 0 (X=0, Y=1, Z=2)
+			 * 	(D) Direction = 1 (Min=0, Max=1)
+			 */
+			break;
+		}
+	}
 	else if (line[0] == 'F') {
-		double feedrate = parse_number(line, 'F', tool_state.current_feedrate);
+		if (extract_var(line, 'F', &arg_f) == 1) {
+			stepper_set_current_feedrate(arg_f);
+			server_write("OK\r\n");
+		}
 	}
 }

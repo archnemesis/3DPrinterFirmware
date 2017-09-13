@@ -11,11 +11,13 @@
 #include "FreeRTOS.h"
 #include "event_groups.h"
 
+#include <stdbool.h>
 #include <math.h>
 #include <string.h>
 
 
 EventGroupHandle_t xStepperEventGroup;
+EventGroupHandle_t xLimitSwitchEventGroup;
 struct StepperState stepper;
 
 bool stepper_channel_enabled(unsigned int ch);
@@ -32,6 +34,7 @@ void stepper_init(void)
 	// initialize event groups and queues
 	//
 	xStepperEventGroup = xEventGroupCreate();
+	xLimitSwitchEventGroup = xEventGroupCreate();
 
 	//
 	// clear stepper state struct
@@ -87,6 +90,11 @@ bool stepper_channel_active(unsigned int ch)
 	return stepper.ch[ch].active;
 }
 
+void stepper_channel_set_active(unsigned int ch)
+{
+	stepper.ch[ch].active = true;
+}
+
 /**
  * Set the stepper resolution in steps per mm.
  * @param ch Stepper motor channel
@@ -97,6 +105,16 @@ void stepper_chan_set_steps_per_mm(unsigned int ch, unsigned int steps)
 	stepper.ch[ch].steps_per_mm = steps;
 }
 
+unsigned int stepper_chan_steps_per_mm(unsigned int ch)
+{
+	return stepper.ch[ch].steps_per_mm;
+}
+
+unsigned int distance_to_steps(unsigned int steps_per_mm, float distance)
+{
+	return (unsigned int)roundf(distance * steps_per_mm);
+}
+
 /**
  * Given a stepper channel, convert speed to step period
  * based on the timer frequency.
@@ -104,9 +122,9 @@ void stepper_chan_set_steps_per_mm(unsigned int ch, unsigned int steps)
  * @param speed Speed in mm/s
  * @return Step period needed to move stepper at desired speed
  */
-unsigned int speed_to_step_period(unsigned int ch, float speed)
+unsigned int speed_to_step_period(unsigned int steps_per_mm, float speed)
 {
-	float steps_per_sec = speed * stepper.ch[ch].steps_per_mm;
+	float steps_per_sec = speed * steps_per_mm;
 	float steps_spacing = STEPPER_TIMER_FREQ / steps_per_sec;
 	return (unsigned int)roundf(steps_spacing);
 }
@@ -144,77 +162,105 @@ inline void stepper_reset_channel(unsigned int ch)
 	stepper.ch[ch].period_counter = 0;
 }
 
+void stepper_channel_setup_linear(struct StepperChannel *ch, float current, float target, float dist, float speed)
+{
+	if (target > current) {
+		ch->direction = ch->reverse ? STEPPER_DIR_CCW : STEPPER_DIR_CW;
+	}
+	else {
+		ch->direction = ch->reverse ? STEPPER_DIR_CW : STEPPER_DIR_CCW;
+	}
 
+	ch->step_target = distance_to_steps(ch->steps_per_mm, dist);
+	ch->step_period = speed_to_step_period(ch->steps_per_mm, speed);
+	ch->active = true;
+}
 
-void stepper_move_interpolated(float x, float y, float z)
+bool stepper_move_interpolated(float x, float y, float z)
 {
 	EventBits_t stepper_bits = 0;
+	EventBits_t waiting_bits = 0;
+	struct StepperChannel *ch;
+	int i;
 
 	float linear_dist = sqrt(
 			pow((stepper.machine_coord.x - x), 2) +
-			pow((tool_state.current_y - y), 2) +
-			pow((tool_state.current_z - z), 2));
-	/*
-	 * Feed rate is in mm/s
-	 * Distance is in mm
-	 * Time = rate x distance (seconds)
-	 */
-	float linear_time = linear_dist / tool_state.current_feedrate;
-	float x_distance = fabs(tool_state.current_x - x);
-	float y_distance = fabs(tool_state.current_y - y);
+			pow((stepper.machine_coord.y - y), 2) +
+			pow((stepper.machine_coord.z - z), 2));
 
-	if (x_distance != 0) {
-		float x_speed = x_distance / linear_time;
+	float linear_time = linear_dist / stepper.feedrate_current;
 
-		if (x > tool_state.current_x) {
-			steppers[0].direction = STEPPER_DIR_CCW;
+	float x_distance = fabs(stepper.machine_coord.x - x);
+	float y_distance = fabs(stepper.machine_coord.y - y);
+	float z_distance = fabs(stepper.machine_coord.z - z);
+
+	float x_speed = x_distance / linear_time;
+	float y_speed = y_distance / linear_time;
+	float z_speed = z_distance / linear_time;
+
+	for (i = 0; i < STEPPER_NUM_CHANNELS; i++)
+	{
+		ch = (struct StepperChannel *)&stepper.ch[i];
+
+		if (ch->enabled)
+		{
+			stepper_reset_channel(i);
+
+			switch (ch->axis)
+			{
+				case XAxis:
+				{
+					if (x_distance > 0) {
+						stepper_channel_setup_linear(ch, stepper.machine_coord.x, x, x_distance, x_speed);
+						ch->active = true;
+						stepper.machine_coord.x = x;
+					}
+					break;
+				}
+				case YAxis:
+				{
+					if (y_distance > 0) {
+						stepper_channel_setup_linear(ch, stepper.machine_coord.y, y, y_distance, y_speed);
+						ch->active = true;
+						stepper.machine_coord.y = y;
+					}
+					break;
+				}
+				case ZAxis:
+				{
+					if (z_distance > 0) {
+						stepper_channel_setup_linear(ch, stepper.machine_coord.z, z, z_distance, z_speed);
+						ch->active = true;
+						stepper.machine_coord.z = z;
+					}
+					break;
+				}
+			}
+
+			stepper_bits |= (1 << i);
 		}
-		else {
-			steppers[0].direction = STEPPER_DIR_CW;
-		}
-
-		steppers[0].step_target = distance_to_steps(x_distance);
-		steppers[0].step_period = speed_to_step_period(x_speed) - 1;
-		steppers[0].increment_counter = 0;
-		steppers[0].enabled = 1;
-
-		tool_state.current_x = x;
-		stepper_bits |= EVENT_BITS_X_COMPLETE;
-	}
-
-	if (y_distance != 0) {
-		float y_speed = y_distance / linear_time;
-
-		if (y > tool_state.current_y) {
-			steppers[1].direction = STEPPER_DIR_CCW;
-		}
-		else {
-			steppers[1].direction = STEPPER_DIR_CW;
-		}
-
-		steppers[1].step_target = distance_to_steps(y_distance);
-		steppers[1].step_period = speed_to_step_period(y_speed) - 1;
-		steppers[1].increment_counter = 0;
-		steppers[1].enabled = 1;
-
-		tool_state.current_y = y;
-		stepper_bits |= EVENT_BITS_Y_COMPLETE;
 	}
 
 	if (stepper_bits != 0) {
-		HAL_GPIO_WritePin(steppers[0].enport, steppers[0].enpin, GPIO_PIN_RESET);
-		HAL_GPIO_WritePin(steppers[1].enport, steppers[1].enpin, GPIO_PIN_RESET);
-		HAL_TIM_Base_Start_IT(&htim3);
+		HAL_TIM_Base_Start_IT(&htim2);
 
 		/*
 		 * Wait for the activated steppers to complete their movements
 		 */
-		if (xEventGroupWaitBits(xStepperEventGroup, stepper_bits, pdTRUE, pdTRUE, portMAX_DELAY) == stepper_bits) {
-			HAL_TIM_Base_Stop_IT(&htim3);
-		}
+		while (true) {
+			waiting_bits = xEventGroupWaitBits(xStepperEventGroup, stepper_bits, pdTRUE, pdFALSE, portMAX_DELAY);
 
-		HAL_GPIO_WritePin(steppers[0].enport, steppers[0].enpin, GPIO_PIN_SET);
-		HAL_GPIO_WritePin(steppers[1].enport, steppers[1].enpin, GPIO_PIN_SET);
+			if ((waiting_bits >> STEPPER_NUM_CHANNELS) != 0) {
+				/*
+				 * Limit switch triggered, failure!
+				 */
+				HAL_TIM_Base_Stop_IT(&htim2);
+			}
+
+			if (xEventGroupWaitBits(xStepperEventGroup, stepper_bits, pdTRUE, pdFALSE, portMAX_DELAY) == stepper_bits) {
+				HAL_TIM_Base_Stop_IT(&htim3);
+			}
+		}
 	}
 }
 

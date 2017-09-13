@@ -19,16 +19,32 @@
 #define STEPPER_STEPS_PER_MM	40
 #define STEPPER_MAX_FEED_RATE	50
 
+#define STEPPER_CHANNEL_MASK	0xFF
+
 enum Axis {
-	XAxis,
+	XAxis = 0,
 	YAxis,
 	ZAxis
 };
 
 enum Plane {
-	XYPlane,
+	XYPlane = 0,
 	XZPlane,
 	YZPlane
+};
+
+enum LimitSwitchType {
+	MinLimit = 0,
+	MaxLimit
+};
+
+enum LimitSwitch {
+	XMin = 0,
+	XMax,
+	YMin,
+	YMax,
+	ZMin,
+	ZMax
 };
 
 struct StepperChannel {
@@ -56,10 +72,17 @@ struct StepperChannel {
 	bool active;
 };
 
+struct LimitSwitchChannel {
+	GPIO_TypeDef *port;
+	uint8_t pin;
+	enum Axis axis;
+	enum LimitSwitchType type;
+};
+
 struct StepperCoord {
-	long int x;
-	long int y;
-	long int z;
+	float x;
+	float y;
+	float z;
 };
 
 struct StepperState {
@@ -102,8 +125,16 @@ void stepper_channel_set_enabled(unsigned int ch, bool enabled);
  * @param axis which axis this channel is on
  */
 void stepper_channel_set_axis(unsigned int ch, enum Axis axis);
+
+/**
+ * Set reverse output for stepper axis.
+ * @param ch integer channel number
+ * @param reverse
+ */
 void stepper_channel_set_reverse(unsigned int ch, bool reverse);
+bool stepper_channel_get_reverse(unsigned int ch);
 void stepper_channel_set_steps_per_mm(unsigned int ch, unsigned int steps);
+unsigned int stepper_channel_get_steps_per_mm(unsigned int ch);
 void stepper_channel_set_clk_port(unsigned int ch, GPIO_TypeDef *port, uint8_t pin);
 void stepper_channel_set_dir_port(unsigned int ch, GPIO_TypeDef *port, uint8_t pin);
 void stepper_channel_set_en_port(unsigned int ch, GPIO_TypeDef *port, uint8_t pin);
@@ -111,7 +142,12 @@ void stepper_timer_callback(void);
 float stepper_get_machine_x(void);
 float stepper_get_machine_y(void);
 float stepper_get_machine_z(void);
+void stepper_zero_work_x(void);
+void stepper_zero_work_y(void);
+void stepper_zero_work_z(void);
+void stepper_clear_work_offset(void);
 float stepper_get_current_feedrate(void);
+void stepper_set_feedrate(float feedrate);
 enum Plane stepper_get_active_plane(void);
 void stepper_set_active_plane(enum Plane plane);
 
